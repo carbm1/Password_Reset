@@ -18,7 +18,18 @@ Param(
 
 if (Test-Path .\settings.ps1) {
 	. .\settings.ps1
-	$PSDefaultParameterValues = @{"*-AD*:Server"="$server"}
+
+	#make the script talk to a specific server. Needed for AzureAD connected machines.
+	if ($server) {
+		$PSDefaultParameterValues = @{"*-AD*:Server"="$server"}
+	}
+
+	#Limit the search to a specific OU.
+	if ($limitOUSearchBase) {
+		$ou = $limitOUSearchBase
+	} else {
+		$ou = "ou=Students,$((Get-AdDomain).DistinguishedName)"
+	}
 }
 
 if ($Install) {
@@ -63,13 +74,13 @@ if (($null -eq $studentquery) -or ($studentquery -eq "") -or ($studentquery -eq 
 
 #Query AD
 try {
-	$students = Get-AdUser -Filter "(SurName -like ""$($studentquery)*"") -and (Enabled -eq 'True')" -SearchBase "ou=Students,$((Get-AdDomain).DistinguishedName)" -Properties EmailAddress,HomePhone,physicalDeliveryOfficeName
+	$students = Get-AdUser -Filter "(SurName -like ""$($studentquery)*"") -and (Enabled -eq 'True')" -SearchBase $ou -Properties EmailAddress,HomePhone,physicalDeliveryOfficeName
 } catch {
 	[Microsoft.VisualBasic.Interaction]::MsgBox("Failed to query Active Directory for user.",0,"Try again.")
 	exit(1)
 }
 
-if (($students | Measure-Object).Count -le 0) {
+if ($students.Count -le 0) {
 	[Microsoft.VisualBasic.Interaction]::MsgBox("No students were found. Please try again.",0,"NO RESULTS")
 	exit
 }
@@ -84,7 +95,7 @@ $students = $students | Select-Object -Property @{Name='First Name';Expression={
 
 $selecteduser = $students | Out-GridView -PassThru -Title "Please select a student to reset their password."
 
-if (($selecteduser | Measure-Object).Count -gt 1) {
+if ($selecteduser.Count -gt 1) {
 	$response = [Microsoft.VisualBasic.Interaction]::MsgBox("This tool is designed to only reset one student at a time.",5,"Error Multiple Student Selected.")
 	
 	if ($response -eq 'Retry') {
@@ -93,34 +104,53 @@ if (($selecteduser | Measure-Object).Count -gt 1) {
 		exit(1)
 	}
 
-	if (($selecteduser | Measure-Object).Count -gt 1) {
+	if ($selecteduser.Count -gt 1) {
 		[Microsoft.VisualBasic.Interaction]::MsgBox("This tool is designed to only reset one student at a time.",0,"Error Multiple Student Selected.")
 		exit(1)
 	}
 }
 
-$selecteduser
-
-$user = Get-Aduser -Identity $selecteduser.ObjectGuid
-
-$randomword = Get-Random -InputObject 'Way','Law','Child','Queen','Guest','News','Oven','Power','Lady','Heart','Mom','Cell','Story','Tale','Sir','Poet','Cheek','Two','Mood','Disk','Ear','Basis','Tooth','Week','Mud','Idea','Poem','Debt','Tea','Pizza','Owner','Menu','Loss','Event','Topic','Chest','Uncle','Hall','Piano','Youth','Meat','User','Night','Honey','Gate','Media','Bird'
-$randomspecial = Get-Random -InputObject '!','#','$','.','?','@'
-[string]$randomnum = Get-Random -Minimum 10000 -Maximum 99999
-$password = "$($randomword)$($randomspecial)$($randomnum)"
-
-if ($password.Length -gt 8) { $password = $password.Substring(0,8) }
-
-#write-host "$password"
-
-try {
-	Set-AdAccountPassword -Identity $user -Reset -NewPassword (ConvertTo-SecureString "$password" -AsPlainText -force)
-	if ($requirepasswordchange) {
-		Set-ADUser -Identity $user -ChangePasswordAtLogon $true
-	}
-} catch {
-	[Microsoft.VisualBasic.Interaction]::MsgBox("Something went wrong. Most likely you don't have permissions to reset this student.",0,"Password Reset Failed")
-	exit(1)
+if ($selecteduser.ObjectGuid) {
+	$selecteduser
+	$user = Get-Aduser -Identity $selecteduser.ObjectGuid
+} else {
+	$selecteduser
+	[Microsoft.VisualBasic.Interaction]::MsgBox("No account selected.",0,"Password Reset Failed")
+	exit 1
 }
 
-[Microsoft.VisualBasic.Interaction]::MsgBox("$($user.GivenName) $($user.Surname)`'s password has been reset to:`n$password`n`nPlease have them change their password immediately by following the Change My Password link on their start page.",0,"Done")
+if ($disableAccountsInstead) {
+
+	try {
+		Disable-ADAccount -Identity $user
+		[Microsoft.VisualBasic.Interaction]::MsgBox("$($user.GivenName) $($user.Surname)`'s account has been disabled. The account should be reactivated in the next few minutes. You should recieve an email with their new system generated password.",0,"Done")
+		exit 0
+	} catch {
+		[Microsoft.VisualBasic.Interaction]::MsgBox("Something went wrong disabling the account. Most likely you don't have permissions to disable this student.",0,"Disable Account Failed")
+		exit(1)
+	}
+
+} else {
+	$randomword = Get-Random -InputObject 'Way','Law','Child','Queen','Guest','News','Oven','Power','Lady','Heart','Mom','Cell','Story','Tale','Sir','Poet','Cheek','Two','Mood','Disk','Ear','Basis','Tooth','Week','Mud','Idea','Poem','Debt','Tea','Pizza','Owner','Menu','Loss','Event','Topic','Chest','Uncle','Hall','Piano','Youth','Meat','User','Night','Honey','Gate','Media','Bird'
+	$randomspecial = Get-Random -InputObject '!','#','$','.','?','@'
+	[string]$randomnum = Get-Random -Minimum 10000 -Maximum 99999
+	$password = "$($randomword)$($randomspecial)$($randomnum)"
+
+	if ($password.Length -gt 8) { $password = $password.Substring(0,8) }
+
+	#write-host "$password"
+
+	try {
+		Set-AdAccountPassword -Identity $user -Reset -NewPassword (ConvertTo-SecureString "$password" -AsPlainText -force)
+		if ($requirepasswordchange) {
+			Set-ADUser -Identity $user -ChangePasswordAtLogon $true
+		}
+	} catch {
+		[Microsoft.VisualBasic.Interaction]::MsgBox("Something went wrong. Most likely you don't have permissions to reset this student.",0,"Password Reset Failed")
+		exit(1)
+	}
+
+	[Microsoft.VisualBasic.Interaction]::MsgBox("$($user.GivenName) $($user.Surname)`'s password has been reset to:`n$password`n`nPlease have them change their password immediately by following the Change My Password link on their start page.",0,"Done")
+}
+
 exit
